@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>KG Grill Kitchen | Line Board</title>
+
+  <!-- Same API base meta used by index.html -->
+  <meta name="kg-api-base" content="https://www.delcotechdivision.com/kg">
+
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%232e8b57'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='50' fill='white'%3EKG%3C/text%3E%3C/svg%3E">
+</head>
+<body class="line-page">
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand-block">
+        <img src="pictures/kg_Grill_Kitchen_LogoDesign.png"
+             alt="KG Grill Kitchen logo"
+             class="site-logo">
+        <h1 class="site-title">KG Grill Kitchen – Line Board</h1>
+      </div>
+
+      <div class="line-header-actions">
+        <span class="line-header-role-hint">
+          For Waiters · Chefs · Owner
+        </span>
+        <a href="index.html" class="btn-outline small">
+          Back to customer view
+        </a>
+      </div>
+    </div>
+  </header>
+
+ <main class="line-main">
+    <!-- Ordering availability control -->
+    <section class="line-availability" aria-label="Ordering availability">
+      <div class="line-availability-row">
+        <label class="line-availability-toggle" for="orderingClosedToggle">
+          <input id="orderingClosedToggle" type="checkbox" />
+          <span>Pause ordering</span>
+        </label>
+        <span id="orderingClosedStatus" class="line-availability-status" aria-live="polite">
+          Ordering is live
+        </span>
+      </div>
+      <div class="line-availability-row">
+        <input
+          id="orderingClosedMessageInput"
+          type="text"
+          placeholder="Message customers will see when ordering is off"
+          aria-label="Closed message"
+        />
+      </div>
+      <p class="line-availability-hint">
+        Toggle ordering off to show customers a custom message on the ordering page.
+        Changes sync instantly for everyone looking at the site.
+      </p>
+    </section>
+
+    <section class="line-pricing is-collapsed" aria-label="In-line pricing controls">
+      <div class="line-pricing-header">
+        <div>
+          <h2>In-line / In-store pricing</h2>
+          <p>Adjust only the in-line prices. Pickup and delivery automatically keep their existing markup.</p>
+        </div>
+        <div class="line-pricing-actions">
+          <div class="line-pricing-hint">Pickup/Delivery prices update instantly and cannot be edited here.</div>
+          <button
+            id="linePricingToggle"
+            class="btn-outline small"
+            type="button"
+            aria-expanded="false"
+            aria-controls="pricingEditor"
+          >
+            Show pricing
+          </button>
+        </div>
+      </div>
+      <div id="pricingEditor" class="line-pricing-grid"></div>
+    </section>
+
+    <!-- Tabs like DoorDash tablet -->
+    <div class="line-tabs" role="tablist" aria-label="Order filters">
+      <button class="line-tab active" data-filter="all" type="button">
+        All <span class="line-tab-count" data-count-for="all">0</span>
+      </button>
+      <button class="line-tab" data-filter="needs_action" type="button">
+        Needs action <span class="line-tab-count" data-count-for="needs_action">0</span>
+      </button>
+      <button class="line-tab" data-filter="in_progress" type="button">
+        In progress <span class="line-tab-count" data-count-for="in_progress">0</span>
+      </button>
+      <button class="line-tab" data-filter="ready" type="button">
+        Ready <span class="line-tab-count" data-count-for="ready">0</span>
+      </button>
+      <button class="line-tab" data-filter="scheduled" type="button">
+        Scheduled <span class="line-tab-count" data-count-for="scheduled">0</span>
+      </button>
+      <button class="line-tab" data-filter="history" type="button">
+        History <span class="line-tab-count" data-count-for="history">0</span>
+      </button>
+    </div>
+
+    <!-- Live orders list -->
+    <section class="line-orders-wrapper" aria-label="Orders">
+      <div id="lineOrdersEmpty" class="line-empty">
+        No orders yet. New orders will appear here in real time.
+      </div>
+      <div id="lineOrdersContainer" class="line-orders"></div>
+    </section>
+  </main>
+
+ <script src="analytics-client.js" defer></script>
+ <script src="pricing-data.js"></script>
+  <script>
+    // ------------------------- config helpers -------------------------
+    function getApiBase() {
+      const meta = document.querySelector('meta[name="kg-api-base"]');
+      return (meta && meta.content) || '';
+    }
+    const KG_API_BASE = getApiBase();
+
+    // Shared localStorage key for availability
+    const ORDERING_STATUS_STORAGE_KEY = 'kgOrderingStatus';
+    const DEFAULT_CLOSED_MESSAGE = 'Sorry, we are currently closed. Please check back when we are open.';
+
+    function loadOrderingStatus() {
+      try {
+        const raw = localStorage.getItem(ORDERING_STATUS_STORAGE_KEY);
+        if (!raw) return { closed: false, message: DEFAULT_CLOSED_MESSAGE };
+        const parsed = JSON.parse(raw);
+        return {
+          closed: Boolean(parsed?.closed),
+          message: parsed?.message || DEFAULT_CLOSED_MESSAGE,
+        };
+      } catch (err) {
+        console.warn('Could not read ordering status', err);
+        return { closed: false, message: DEFAULT_CLOSED_MESSAGE };
+      }
+    }
+
+    function saveOrderingStatus(next) {
+      try {
+        localStorage.setItem(
+          ORDERING_STATUS_STORAGE_KEY,
+          JSON.stringify({
+            closed: Boolean(next.closed),
+            message: next.message || DEFAULT_CLOSED_MESSAGE,
+          })
+        );
+      } catch (err) {
+        console.warn('Could not persist ordering status', err);
+      }
+    }
+
+    // ------------------------- pricing overrides -------------------------
+    const {
+      mains: pricingMains = [],
+      sides: pricingSides = [],
+      portionOptions: pricingPortions = {},
+      getEffectivePrices,
+      loadPriceOverrides,
+      savePriceOverrides,
+      computeInlineBasePrice,
+      PRICE_OVERRIDE_STORAGE_KEY,
+    } = window.KG_MENU_DATA || {};
+
+    let pricingOverrides = loadPriceOverrides ? loadPriceOverrides() : { items: {}, portions: {} };
+
+    function formatCurrency(amount) {
+      const num = Number(amount) || 0;
+      return `$${num.toFixed(2)}`;
+    }
+
+    function refreshPricingOverrides() {
+      pricingOverrides = loadPriceOverrides ? loadPriceOverrides() : pricingOverrides;
+    }
+
+    function pricingFor(itemId, portionKey = null) {
+      if (getEffectivePrices) {
+        const pricing = getEffectivePrices(itemId, portionKey, pricingOverrides);
+        if (pricing) return pricing;
+      }
+
+      if (portionKey) {
+        const opts = pricingPortions[itemId] || [];
+        const match = opts.find(o => o.key === portionKey) || opts[0];
+        if (match) {
+          return {
+            inline: match.inlinePrice,
+            online: match.onlinePrice,
+          };
+        }
+      }
+
+      const item = pricingMains.concat(pricingSides).find(i => i.id === itemId);
+      if (!item) return { inline: 0, online: 0 };
+      const inline = computeInlineBasePrice ? computeInlineBasePrice(item.price, item.id) : item.price;
+      return { inline, online: item.price };
+    }
+
+    function commitPricingOverrides(next) {
+      pricingOverrides = next;
+      if (savePriceOverrides) {
+        savePriceOverrides(next);
+      }
+    }
+
+    function updateInlinePrice(itemId, portionKey, inlineValue) {
+      if (!Number.isFinite(inlineValue) || inlineValue <= 0) return;
+
+      const next = {
+        items: { ...(pricingOverrides.items || {}) },
+        portions: { ...(pricingOverrides.portions || {}) },
+      };
+
+      if (portionKey) {
+        next.portions[itemId] = { ...(next.portions[itemId] || {}) };
+        next.portions[itemId][portionKey] = inlineValue;
+      } else {
+        next.items[itemId] = inlineValue;
+      }
+
+      commitPricingOverrides(next);
+      renderPricingEditor();
+    }
+
+    function resetInlinePrice(itemId, portionKey) {
+      const next = {
+        items: { ...(pricingOverrides.items || {}) },
+        portions: { ...(pricingOverrides.portions || {}) },
+      };
+
+      if (portionKey) {
+        if (next.portions[itemId]) {
+          delete next.portions[itemId][portionKey];
+          if (Object.keys(next.portions[itemId]).length === 0) {
+            delete next.portions[itemId];
+          }
+        }
+      } else {
+        delete next.items[itemId];
+      }
+
+      commitPricingOverrides(next);
+      renderPricingEditor();
+    }
+
+    function createPriceRow(itemId, label, inlinePrice, pickupPrice, portionKey) {
+      const row = document.createElement('div');
+      row.className = 'line-price-row';
+
+      const labelEl = document.createElement('div');
+      labelEl.className = 'line-price-label';
+      labelEl.textContent = label;
+
+      const controls = document.createElement('div');
+      controls.className = 'line-price-controls';
+
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '0.01';
+      input.min = '0';
+      input.value = inlinePrice.toFixed(2);
+      input.className = 'line-price-input';
+      input.addEventListener('change', (e) => {
+        const val = parseFloat(e.target.value);
+        updateInlinePrice(itemId, portionKey, val);
+      });
+
+      const preview = document.createElement('div');
+      preview.className = 'line-price-preview';
+      preview.textContent = `Pickup/Delivery: ${formatCurrency(pickupPrice)}`;
+
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'btn-outline tiny';
+      resetBtn.textContent = 'Reset';
+      resetBtn.addEventListener('click', () => resetInlinePrice(itemId, portionKey));
+
+      controls.appendChild(input);
+      controls.appendChild(preview);
+      controls.appendChild(resetBtn);
+
+      row.appendChild(labelEl);
+      row.appendChild(controls);
+      return row;
+    }
+
+    function renderPricingEditor() {
+      const container = document.getElementById('pricingEditor');
+      if (!container) return;
+
+      refreshPricingOverrides();
+      container.innerHTML = '';
+
+      const allItems = pricingMains.concat(pricingSides);
+
+      allItems.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'line-price-card';
+
+
+        const header = document.createElement('header');
+        header.className = 'line-price-card-header';
+        header.innerHTML = `<div class="line-price-title">${item.name}</div><div class="line-price-desc">${item.description || ''}</div>`;
+        card.appendChild(header);
+
+        const rows = document.createElement('div');
+        rows.className = 'line-price-rows';
+
+        const portions = pricingPortions[item.id];
+        if (portions && portions.length) {
+          portions.forEach(opt => {
+            const pricing = pricingFor(item.id, opt.key);
+            rows.appendChild(
+              createPriceRow(
+                item.id,
+                opt.label,
+                pricing.inline,
+                pricing.online,
+                opt.key,
+              ),
+            );
+          });
+        } else {
+          const pricing = pricingFor(item.id, null);
+          rows.appendChild(
+            createPriceRow(
+              item.id,
+              'In-line price',
+              pricing.inline,
+              pricing.online,
+              null,
+            ),
+          );
+        }
+
+        card.appendChild(rows);
+        container.appendChild(card);
+      });
+    }
+
+    // ------------------------- pricing collapse -------------------------
+    let pricingCollapsed = true;
+
+    function setPricingCollapsed(collapsed) {
+      pricingCollapsed = collapsed;
+      const section = document.querySelector('.line-pricing');
+      const toggle = document.getElementById('linePricingToggle');
+
+      section?.classList.toggle('is-collapsed', collapsed);
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        toggle.textContent = collapsed ? 'Show pricing' : 'Hide pricing';
+      }
+    }
+
+    function updateAvailabilityUI(status) {
+      const toggle = document.getElementById('orderingClosedToggle');
+      const messageInput = document.getElementById('orderingClosedMessageInput');
+      const statusLabel = document.getElementById('orderingClosedStatus');
+
+      if (toggle) toggle.checked = !!status.closed;
+      if (messageInput && !messageInput.value) {
+        messageInput.value = status.message || DEFAULT_CLOSED_MESSAGE;
+      }
+
+      if (statusLabel) {
+        statusLabel.textContent = status.closed
+          ? 'Customers see: "' + (status.message || DEFAULT_CLOSED_MESSAGE) + '"'
+          : 'Ordering is live';
+        statusLabel.classList.toggle('is-closed', !!status.closed);
+      }
+    }
+
+    function handleAvailabilityChange() {
+      const toggle = document.getElementById('orderingClosedToggle');
+      const messageInput = document.getElementById('orderingClosedMessageInput');
+      const nextStatus = {
+        closed: !!toggle?.checked,
+        message: (messageInput?.value || DEFAULT_CLOSED_MESSAGE).trim() || DEFAULT_CLOSED_MESSAGE,
+      };
+      saveOrderingStatus(nextStatus);
+      updateAvailabilityUI(nextStatus);
+    }
+
+// ------------------------- audio + speech ------------------------
+// New order sound (plays when a new active order appears)
+const newOrderSound = (() => {
+  try {
+    const a = new Audio('audio/newOrder.mp3');
+    a.preload = 'auto';
+    return a;
+  } catch (e) {
+    console.warn('Audio not supported', e);
+    return null;
+  }
+})();
+
+// iOS Safari: audio + speech are blocked until first user interaction.
+// We "unlock" them on the first tap/click.
+let audioUnlocked = false;
+
+function unlockAudioAndSpeech() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+
+  // On iOS Safari we need a *real* (even if very quiet) playback
+  if (newOrderSound) {
+    try {
+      const prevMuted  = newOrderSound.muted;
+      const prevVolume = (typeof newOrderSound.volume === 'number')
+        ? newOrderSound.volume
+        : 1;
+
+      // Play quietly but not muted so Safari counts this as user-initiated audio
+      newOrderSound.muted = false;
+      newOrderSound.volume = 0.01;
+      newOrderSound.currentTime = 0;
+
+      newOrderSound.play().then(() => {
+        // Stop it shortly after and restore original settings
+        setTimeout(() => {
+          try {
+            newOrderSound.pause();
+            newOrderSound.currentTime = 0;
+            newOrderSound.volume = prevVolume;
+            newOrderSound.muted = prevMuted;
+          } catch (e) {
+            // ignore restore errors
+          }
+        }, 120); // ~0.1s is enough to "unlock" audio
+      }).catch(() => {
+        // If it fails, just restore volume/mute; later plays may still work
+        newOrderSound.volume = prevVolume;
+        newOrderSound.muted = prevMuted;
+      });
+    } catch (e) {
+      // ignore
+    }
+  }
+
+
+}
+
+function playNewOrderSound() {
+  try {
+    // Prefer the shared, preloaded audio object so the mobile "unlock" applies
+    const sound = newOrderSound || new Audio('audio/newOrder.mp3');
+    sound.currentTime = 0;
+    sound.muted = false; // ensure iOS counts this as a real playback
+    sound.play().catch(e => console.warn('play failed:', e));
+  } catch (err) {
+    console.error("Audio error:", err);
+  }
+}
+
+
+    // ------------------------- speech (simplified for iOS) ------------------------
+    function speakOrderReady(name) {
+      if (!('speechSynthesis' in window)) return;
+
+      const text = name
+        ? `Order for ${name} is ready at K G Grill Kitchen.`
+        : `An order is ready at K G Grill Kitchen.`;
+
+      try {
+        // WebKit/iOS behaves better if we cancel any pending speech first
+        window.speechSynthesis.cancel();
+      } catch (e) {
+        // ignore
+      }
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      // Explicit language helps iOS pick a voice
+      utterance.lang = 'en-US';
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+
+      try {
+        window.speechSynthesis.speak(utterance);
+      } catch (e) {
+        console.warn('speechSynthesis failed', e);
+      }
+    }
+   
+
+
+    let currentFilter = 'all';
+    let currentOrders = [];
+
+        function findNewActiveOrders(prev, next) {
+      const prevIds = new Set((prev || []).map(o => o.id));
+      return (next || []).filter(o => {
+        if (!o || !o.id) return false;
+        if (prevIds.has(o.id)) return false;
+
+        const status = String(o.status || 'needs_action').toLowerCase();
+        const isHistory = status === 'completed' || status === 'canceled';
+        return !isHistory; // only "live" orders trigger sound
+      });
+    }
+
+
+    // ------------------------- rendering ------------------------------
+    function formatTime(ts) {
+      if (!ts) return '';
+      const d = new Date(ts);
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+
+    // Live “time since order placed” timers for each active order
+let orderTimerIntervalId = null;
+
+function startOrderTimers() {
+  if (orderTimerIntervalId != null) return;
+  orderTimerIntervalId = window.setInterval(updateOrderTimers, 1000);
+  // Update immediately so the chef sees something right away
+  updateOrderTimers();
+}
+
+function updateOrderTimers() {
+  const now = Date.now();
+
+  document
+    .querySelectorAll('.line-order-card[data-timer-active="1"]')
+    .forEach(card => {
+      const timerEl = card.querySelector('[data-order-timer]');
+      if (!timerEl) return;
+
+      const createdAtMs = Number(card.dataset.createdAt || 0);
+      if (!createdAtMs) return;
+
+      let elapsedMs = now - createdAtMs;
+      if (elapsedMs < 0) elapsedMs = 0;
+
+      const totalSeconds = Math.floor(elapsedMs / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+
+      let label;
+      if (minutes < 60) {
+        label =
+          String(minutes).padStart(2, '0') +
+          ':' +
+          String(seconds).padStart(2, '0');
+      } else {
+        const hours = Math.floor(minutes / 60);
+        const remMin = minutes % 60;
+        label = `${hours}h ${String(remMin).padStart(2, '0')}m`;
+      }
+
+      timerEl.textContent = `⏱ ${label}`;
+    });
+}
+
+    function renderOrders(orders) {
+      currentOrders = orders || [];
+      const container = document.getElementById('lineOrdersContainer');
+      const emptyState = document.getElementById('lineOrdersEmpty');
+
+      if (!container) return;
+
+      // Count per status
+      const counts = {
+        all: 0,
+        needs_action: 0,
+        in_progress: 0,
+        ready: 0,
+        scheduled: 0,
+        history: 0,
+      };
+
+      const visibleOrders = [];
+
+      const nowOrders = [...currentOrders].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+      for (const o of nowOrders) {
+        const status = (o.status || 'needs_action').toLowerCase();
+        const type = (o.type || o.fulfilment || 'pickup').toLowerCase();
+
+        const isHistory = status === 'completed' || status === 'canceled';
+        const isScheduled = status === 'scheduled' || !!o.isScheduled;
+
+        counts.all += isHistory ? 0 : 1;
+        if (status in counts) counts[status]++;
+
+        if (isScheduled) counts.scheduled++;
+        if (isHistory) counts.history++;
+
+        // Filter logic
+        let include = true;
+        if (currentFilter === 'needs_action') include = status === 'needs_action';
+        else if (currentFilter === 'in_progress') include = status === 'in_progress';
+        else if (currentFilter === 'ready') include = status === 'ready';
+        else if (currentFilter === 'scheduled') include = isScheduled;
+        else if (currentFilter === 'history') include = isHistory;
+        else if (currentFilter === 'all') include = !isHistory;
+
+        if (include) visibleOrders.push(o);
+      }
+
+      // Update tab counts
+      document.querySelectorAll('.line-tab-count').forEach(span => {
+        const key = span.dataset.countFor;
+        if (!key) return;
+        span.textContent = counts[key] ?? 0;
+      });
+
+      // Empty state
+      if (visibleOrders.length === 0) {
+        container.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+      }
+
+      emptyState.style.display = 'none';
+      container.innerHTML = '';
+
+      for (const order of visibleOrders) {
+        const status = (order.status || 'needs_action').toLowerCase();
+        const type = (order.type || order.fulfilment || 'pickup').toLowerCase();
+        const isHistory = status === 'completed' || status === 'canceled';
+
+const card = document.createElement('article');
+card.className = 'line-order-card status-' + status + ' type-' + type;
+card.dataset.orderId = order.id;
+
+// For active (non-history) orders, store a timestamp so we can run a live timer
+if (!isHistory) {
+  const createdAtMs = order.createdAt
+    ? new Date(order.createdAt).getTime()
+    : Date.now();
+  card.dataset.createdAt = String(createdAtMs);
+  card.dataset.timerActive = '1';
+}
+
+
+        const itemsHtml = (order.items || []).map(item => {
+          const qty = item.quantity || 1;
+          const name = item.name || item.id || 'Item';
+          const side = item.freeSide ? ` · Side: ${item.freeSide}` : '';
+          const sauce = item.sauce ? ` · Sauce: ${item.sauce}` : '';
+          return `<li>${qty}× ${name}<span class="line-item-meta">${side}${sauce}</span></li>`;
+        }).join('');
+
+        const fulfilLabel =
+          type === 'delivery' ? 'Delivery' :
+          type === 'inline' ? 'In-line (pay at cashier)' :
+          'Pickup';
+
+        const badgeText =
+          status === 'needs_action' ? 'Needs action' :
+          status === 'in_progress' ? 'In progress' :
+          status === 'ready' ? 'Ready' :
+          status === 'completed' ? 'Completed' :
+          status === 'canceled' ? 'Canceled' :
+          status === 'scheduled' ? 'Scheduled' :
+          status;
+
+        // Action buttons
+        let actionsHtml = '';
+        if (!isHistory) {
+          if (status === 'needs_action') {
+            actionsHtml = `
+              <button type="button" class="line-btn primary" data-action="start">Start</button>
+              <button type="button" class="line-btn subtle" data-action="cancel">Cancel</button>`;
+          } else if (status === 'in_progress') {
+            actionsHtml = `
+              <button type="button" class="line-btn primary" data-action="ready">Mark ready</button>
+              <button type="button" class="line-btn subtle" data-action="cancel">Cancel</button>`;
+          } else if (status === 'ready') {
+            actionsHtml = `
+              <button type="button" class="line-btn primary" data-action="complete">Complete</button>`;
+          } else if (status === 'scheduled') {
+            actionsHtml = `
+              <button type="button" class="line-btn primary" data-action="start">Start now</button>`;
+          }
+        }
+
+        const totalCents = order.totals?.total ?? order.total ?? null;
+        const totalText = typeof totalCents === 'number'
+          ? '$' + (totalCents / 100).toFixed(2)
+          : '';
+
+card.innerHTML = `
+  <header class="line-order-header">
+    <div>
+      <div class="line-order-id">${order.id || 'Order'}</div>
+      <div class="line-order-meta">
+        <span class="pill pill-${type}">${fulfilLabel}</span>
+        <span class="pill pill-status pill-${status}">${badgeText}</span>
+        <span class="line-order-time">${formatTime(order.createdAt)}</span>
+        ${!isHistory ? `
+          <span class="line-order-timer" data-order-timer>⏱ 00:00</span>
+        ` : ''}
+      </div>
+    </div>
+    ${totalText ? `<div class="line-order-total">${totalText}</div>` : ''}
+  </header>
+          <div class="line-order-body">
+            <div class="line-order-customer">
+              ${order.name ? `<div class="line-order-name">${order.name}</div>` : ''}
+              ${order.phone ? `<div class="line-order-phone">${order.phone}</div>` : ''}
+              ${order.address ? `<div class="line-order-address">${order.address}</div>` : ''}
+            </div>
+            <ul class="line-order-items">
+              ${itemsHtml}
+            </ul>
+            ${order.notes ? `<div class="line-order-notes">📝 ${order.notes}</div>` : ''}
+          </div>
+          <footer class="line-order-footer">
+            ${actionsHtml}
+          </footer>
+        `;
+
+    container.appendChild(card);
+  }
+
+  // Make sure the elapsed-time timers are running
+  startOrderTimers();
+}
+
+// ------------------------- API calls ------------------------------
+async function fetchOrders() {
+
+      try {
+        const res = await fetch(KG_API_BASE + '/line-orders?includeHistory=1', {
+          cache: 'no-store',
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        const nextOrders = data.orders || [];
+        const newActive = findNewActiveOrders(currentOrders, nextOrders);
+
+        renderOrders(nextOrders);
+
+        // Play sound if any brand-new active orders just appeared
+        if (newActive.length > 0) {
+          playNewOrderSound();
+        }
+      } catch (err) {
+        console.error('Failed to load line orders', err);
+      }
+    }
+
+
+    async function updateOrderStatus(id, action) {
+      let status;
+      if (action === 'start') status = 'in_progress';
+      else if (action === 'ready') status = 'ready';
+      else if (action === 'complete') status = 'completed';
+      else if (action === 'cancel') status = 'canceled';
+      else return;
+
+      try {
+        const res = await fetch(
+          KG_API_BASE + '/line-orders/' + encodeURIComponent(id) + '/status',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status }),
+          }
+        );
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        let updatedOrder = null;
+
+        if (data.order) {
+          updatedOrder = data.order;
+          const idx = currentOrders.findIndex(o => o.id === data.order.id);
+          if (idx >= 0) {
+            currentOrders[idx] = data.order;
+          } else {
+            currentOrders.unshift(data.order);
+          }
+          renderOrders(currentOrders);
+        } else {
+          await fetchOrders();
+        }
+
+        // When an order is marked "ready", speak their name so the room hears it
+        if (status === 'ready') {
+          const orderToAnnounce =
+            updatedOrder ||
+            currentOrders.find(o => o.id === id) ||
+            null;
+          const name = orderToAnnounce && orderToAnnounce.name
+            ? orderToAnnounce.name
+            : '';
+          speakOrderReady(name);
+        }
+      } catch (err) {
+        console.error('Failed to update order status', err);
+        alert('Could not update order. Please try again.');
+      }
+    }
+
+    // ------------------------- events --------------------------------
+  document.addEventListener('DOMContentLoaded', () => {
+    // Availability toggle
+    updateAvailabilityUI(loadOrderingStatus());
+    renderPricingEditor();
+
+    // Pricing visibility toggle (default collapsed)
+    setPricingCollapsed(true);
+    document.getElementById('linePricingToggle')?.addEventListener('click', () => {
+      setPricingCollapsed(!pricingCollapsed);
+    });
+
+    const availabilityToggle = document.getElementById('orderingClosedToggle');
+    const availabilityMessage = document.getElementById('orderingClosedMessageInput');
+  availabilityToggle?.addEventListener('change', handleAvailabilityChange);
+  availabilityMessage?.addEventListener('blur', handleAvailabilityChange);
+  availabilityMessage?.addEventListener('input', handleAvailabilityChange);
+
+    window.addEventListener('storage', (event) => {
+      if (event.key === ORDERING_STATUS_STORAGE_KEY) {
+        updateAvailabilityUI(loadOrderingStatus());
+      } else if (event.key === PRICE_OVERRIDE_STORAGE_KEY) {
+        renderPricingEditor();
+      }
+    });
+
+  // On first tap/click, unlock audio and A.I. voice (needed for iOS Safari)
+  ['click', 'touchstart'].forEach(evt => {
+    document.addEventListener(
+      evt,
+      () => {
+        unlockAudioAndSpeech();
+      },
+      { once: true, passive: true }
+    );
+  });
+
+  // Tab clicks
+  document.querySelectorAll('.line-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.line-tab').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          currentFilter = btn.dataset.filter || 'all';
+          renderOrders(currentOrders);
+        });
+      });
+
+      // Action buttons via delegation
+      document.getElementById('lineOrdersContainer').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        const card = btn.closest('.line-order-card');
+        const id = card?.dataset.orderId;
+        if (!id) return;
+        updateOrderStatus(id, action);
+      });
+
+      // Initial fetch + polling
+      fetchOrders();
+      setInterval(fetchOrders, 4000);
+
+      window.addEventListener('focus', fetchOrders);
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) fetchOrders();
+      });
+    });
+
+  </script>
+</body>
+</html>
